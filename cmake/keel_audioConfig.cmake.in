@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(keel)
+
+include("${CMAKE_CURRENT_LIST_DIR}/keel_audioTargets.cmake")
+if(NOT TARGET keel::audio AND TARGET keel::keel_audio)
+    add_library(keel::audio ALIAS keel::keel_audio)
+endif()
+check_required_components(keel_audio)

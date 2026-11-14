@@ -1,4 +1,4 @@
-# keelcpp/audio-formats
+# keelcpp/audio
 
 Lightweight C++20 audio & MIDI container codecs built on [`keelcpp/keel`](https://github.com/keelcpp/keel) under the `0BSD` license.
 
@@ -11,4 +11,4 @@ Lightweight C++20 audio & MIDI container codecs built on [`keelcpp/keel`](https:
 
 ## CMake Integration
 
-Links as `keel::audio_formats` (`find_package(keel_audio_formats)` or `FetchContent`).
+Links as `keel::audio` (`find_package(keel_audio)` or `FetchContent`).

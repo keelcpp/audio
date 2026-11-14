@@ -1068,6 +1068,6 @@ int main() {
         std::fprintf(stderr, "%d test check(s) FAILED (%d passed)\n", g_tests_failed, g_tests_passed);
         return 1;
     }
-    std::printf("All %d keel::audio_formats test checks passed.\n", g_tests_passed);
+    std::printf("All %d keel::audio test checks passed.\n", g_tests_passed);
     return 0;
 }
