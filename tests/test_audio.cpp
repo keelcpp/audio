@@ -175,7 +175,7 @@ void test_cepstral_mfcc_gtcc() {
                 max_k = k;
             }
         }
-        const f64 peak_hz = static_cast<f64>(max_k) * 16000.0 / static_cast<f64>(NFFT);
+        const f64 peak_hz = keel::as<f64>(max_k) * 16000.0 / keel::as<f64>(NFFT);
         CHECK(keel::abs(peak_hz - fc[b]) < 100.0);
     }
 
@@ -204,7 +204,7 @@ void test_cepstral_mfcc_gtcc() {
     CHECK(aud::cepstral_coefficients_f32(spec_f, 4, 2, 3, cf_out, aud::CepstralRectification::kLog) ==
           aud::AudioStatus::kOk);
     for (usize i = 0; i < 6; ++i) {
-        CHECK_NEAR(static_cast<f64>(cf_out[i]), c_log[i], 1e-5);
+        CHECK_NEAR(keel::as<f64>(cf_out[i]), c_log[i], 1e-5);
     }
 
     // MFCC and GTCC on a 0.25s 16kHz synthetic tone
@@ -212,7 +212,7 @@ void test_cepstral_mfcc_gtcc() {
     constexpr usize kN = 4000;
     Array<f64> sig(kN);
     for (usize i = 0; i < kN; ++i) {
-        const f64 t = static_cast<f64>(i) / kFs;
+        const f64 t = keel::as<f64>(i) / kFs;
         sig[i] = 0.6 * keel::sin(kTau * 440.0 * t) + 0.3 * keel::sin(kTau * 880.0 * t);
     }
     const usize n_frames = aud::audio_frame_count(kN, kFs, 0.03, 0.02);
@@ -245,7 +245,7 @@ void test_pitch_and_harmonic_ratio() {
     constexpr f64 kF0 = 200.0;
     Array<f64> tone(kN);
     for (usize i = 0; i < kN; ++i) {
-        const f64 t = static_cast<f64>(i) / kFs;
+        const f64 t = keel::as<f64>(i) / kFs;
         tone[i] = 1.0 * keel::sin(kTau * kF0 * t) + 0.5 * keel::sin(kTau * 2.0 * kF0 * t) +
                   0.3 * keel::sin(kTau * 3.0 * kF0 * t) + 0.2 * keel::sin(kTau * 4.0 * kF0 * t);
     }
@@ -280,7 +280,7 @@ void test_pitch_and_harmonic_ratio() {
     // Higher frequency pure tone (440 Hz) has shorter period relative to 30ms Hamming window -> > 0.9
     Array<f64> tone440(kN);
     for (usize i = 0; i < kN; ++i) {
-        tone440[i] = keel::sin(kTau * 440.0 * static_cast<f64>(i) / kFs);
+        tone440[i] = keel::sin(kTau * 440.0 * keel::as<f64>(i) / kFs);
     }
     CHECK(aud::harmonic_ratio(tone440, kFs, hr) == aud::AudioStatus::kOk);
     for (usize i = 0; i < n_hr; ++i) {

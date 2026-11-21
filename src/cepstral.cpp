@@ -28,8 +28,8 @@ FrameGeometry compute_frame_geometry(usize num_samples, f64 sample_rate, f64 win
     if (w_i <= 0) {
         return g;
     }
-    g.win_len = static_cast<usize>(w_i);
-    g.overlap = (o_i > 0) ? static_cast<usize>(o_i) : 0;
+    g.win_len = as<usize>(w_i);
+    g.overlap = (o_i > 0) ? as<usize>(o_i) : 0;
     if (g.overlap >= g.win_len) {
         g.overlap = g.win_len - 1;
     }
@@ -53,16 +53,16 @@ f64 rectify_value(f64 v, CepstralRectification rect, f64 log_floor) noexcept {
 }
 
 void build_dct2_basis(usize num_bands, usize num_coeffs, MutArrayRef<f64> basis_col_major) noexcept {
-    const f64 l_f = static_cast<f64>(num_bands);
+    const f64 l_f = as<f64>(num_bands);
     const f64 a = keel::sqrt(1.0 / l_f);
     const f64 b = keel::sqrt(2.0 / l_f);
     for (usize l = 0; l < num_bands; ++l) {
         basis_col_major[0 + l * num_coeffs] = a;
     }
     for (usize l = 0; l < num_bands; ++l) {
-        const f64 lc = static_cast<f64>(l) + 0.5;
+        const f64 lc = as<f64>(l) + 0.5;
         for (usize n = 1; n < num_coeffs; ++n) {
-            basis_col_major[n + l * num_coeffs] = b * keel::cos(kPi * static_cast<f64>(n) * lc / l_f);
+            basis_col_major[n + l * num_coeffs] = b * keel::cos(kPi * as<f64>(n) * lc / l_f);
         }
     }
 }
@@ -122,7 +122,7 @@ void slaney_mel_band_edges(MutArrayRef<f64> edges) noexcept {
     constexpr f64 kFactor = 133.33333333333333;
     const usize lin_end = (num_edges < 13) ? num_edges : 13;
     for (usize i = 0; i < lin_end; ++i) {
-        edges[i] = kFactor + (kFactor * 0.5) * static_cast<f64>(i);
+        edges[i] = kFactor + (kFactor * 0.5) * as<f64>(i);
     }
     for (usize i = lin_end; i < num_edges; ++i) {
         edges[i] = edges[i - 1] * 1.0711703;
@@ -145,7 +145,7 @@ AudioStatus slaney_mel_filterbank(f64 sample_rate, usize fft_len, ArrayRef<f64> 
         fb_col_major[i] = 0.0;
     }
 
-    const f64 bin_to_hz = sample_rate / static_cast<f64>(fft_len);
+    const f64 bin_to_hz = sample_rate / as<f64>(fft_len);
     for (usize k = 0; k < num_bands; ++k) {
         const f64 left = edges[k];
         const f64 centre = edges[k + 1];
@@ -161,7 +161,7 @@ AudioStatus slaney_mel_filterbank(f64 sample_rate, usize fft_len, ArrayRef<f64> 
         const f64 norm = 2.0 / base_w;
         f64* col = fb_col_major.data() + k * h;
         for (usize j = 0; j < h; ++j) {
-            const f64 f = static_cast<f64>(j) * bin_to_hz;
+            const f64 f = as<f64>(j) * bin_to_hz;
             const f64 rise = (f - left) / rise_w;
             const f64 fall = (right - f) / fall_w;
             f64 w = (rise < fall) ? rise : fall;
@@ -237,9 +237,9 @@ AudioStatus gammatone_filterbank(f64 sample_rate, ArrayRef<f64> center_freqs_hz,
         }
 
         f64* row = fb_row_major.data() + i * h;
-        const f64 nfft_f = static_cast<f64>(fft_len);
+        const f64 nfft_f = as<f64>(fft_len);
         for (usize k = 0; k < h; ++k) {
-            const f64 w = -kTau * static_cast<f64>(k) / nfft_f;
+            const f64 w = -kTau * as<f64>(k) / nfft_f;
             const c64 zinv = keel::exp(j * w);
             const c64 zinv2 = zinv * zinv;
             const c64 den = c64(b0, 0.0) + b1 * zinv + b2 * zinv2;
@@ -319,7 +319,7 @@ AudioStatus cepstral_coefficients_f32(ArrayRef<f32> spectra_col_major, usize num
 
     if (rect != CepstralRectification::kNone) {
         for (usize i = 0; i < in_total; ++i) {
-            if (!(static_cast<f64>(spectra_col_major[i]) >= 0.0)) {
+            if (!(as<f64>(spectra_col_major[i]) >= 0.0)) {
                 return AudioStatus::kInvalidArgument;
             }
         }
@@ -332,7 +332,7 @@ AudioStatus cepstral_coefficients_f32(ArrayRef<f32> spectra_col_major, usize num
     const f64 log_floor = keel::log10(Limits<f64>::kMinPositive);
     Array<f32> rectified(in_total, scratch.allocator());
     for (usize i = 0; i < in_total; ++i) {
-        rectified[i] = static_cast<f32>(rectify_value(static_cast<f64>(spectra_col_major[i]), rect, log_floor));
+        rectified[i] = as<f32>(rectify_value(as<f64>(spectra_col_major[i]), rect, log_floor));
     }
 
     for (usize a = 0; a < num_frames; ++a) {
@@ -340,7 +340,7 @@ AudioStatus cepstral_coefficients_f32(ArrayRef<f32> spectra_col_major, usize num
         for (usize k = 0; k < num_coeffs; ++k) {
             f32 acc = 0.0f;
             for (usize l = 0; l < num_bands; ++l) {
-                acc += static_cast<f32>(basis[k + l * num_coeffs]) * rectified[s_base + l];
+                acc += as<f32>(basis[k + l * num_coeffs]) * rectified[s_base + l];
             }
             coeffs_col_major[a + k * num_frames] = acc;
         }
@@ -455,7 +455,7 @@ AudioStatus gtcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
     const f64 low_erb = hz_to_erb(f_low);
     const f64 high_erb = hz_to_erb(f_high);
     const f64 diff_erb = keel::ceil(high_erb - low_erb);
-    const usize num_bands = (diff_erb > 0.0) ? static_cast<usize>(diff_erb) : 0;
+    const usize num_bands = (diff_erb > 0.0) ? as<usize>(diff_erb) : 0;
 
     if (fg.num_frames == 0 || fg.win_len == 0 || num_bands == 0) {
         return AudioStatus::kOk;
@@ -477,9 +477,9 @@ AudioStatus gtcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
     if (num_bands == 1) {
         fc[0] = erb_to_hz(low_erb);
     } else {
-        const f64 step = (high_erb - low_erb) / static_cast<f64>(num_bands - 1);
+        const f64 step = (high_erb - low_erb) / as<f64>(num_bands - 1);
         for (usize i = 0; i < num_bands; ++i) {
-            fc[i] = erb_to_hz(low_erb + step * static_cast<f64>(i));
+            fc[i] = erb_to_hz(low_erb + step * as<f64>(i));
         }
     }
 

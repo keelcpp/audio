@@ -9,9 +9,9 @@ namespace keel::audio {
 void hamming_periodic(MutArrayRef<f64> out) noexcept {
     const usize n = out.size();
     if (n == 0) return;
-    const f64 nf = static_cast<f64>(n);
+    const f64 nf = as<f64>(n);
     for (usize i = 0; i < n; ++i) {
-        out[i] = 0.54 - 0.46 * keel::cos(kTau * static_cast<f64>(i) / nf);
+        out[i] = 0.54 - 0.46 * keel::cos(kTau * as<f64>(i) / nf);
     }
 }
 
@@ -35,20 +35,20 @@ AudioStatus mel_filterbank(f64 sample_rate, usize num_bands, usize fft_len,
     }
 
     const f64 mel_max = hz_to_mel(sample_rate * 0.5);
-    const f64 denom_bands = static_cast<f64>(num_bands + 1);
-    const f64 fft_f = static_cast<f64>(fft_len);
+    const f64 denom_bands = as<f64>(num_bands + 1);
+    const f64 fft_f = as<f64>(fft_len);
 
     for (usize b = 0; b < num_bands; ++b) {
-        const f64 m_lo = static_cast<f64>(b) / denom_bands * mel_max;
-        const f64 m_ce = static_cast<f64>(b + 1) / denom_bands * mel_max;
-        const f64 m_hi = static_cast<f64>(b + 2) / denom_bands * mel_max;
+        const f64 m_lo = as<f64>(b) / denom_bands * mel_max;
+        const f64 m_ce = as<f64>(b + 1) / denom_bands * mel_max;
+        const f64 m_hi = as<f64>(b + 2) / denom_bands * mel_max;
         const f64 f_lo = mel_to_hz(m_lo);
         const f64 f_ce = mel_to_hz(m_ce);
         const f64 f_hi = mel_to_hz(m_hi);
         center_freqs_hz[b] = f_ce;
 
         for (usize k = 0; k < h; ++k) {
-            const f64 f = static_cast<f64>(k) * sample_rate / fft_f;
+            const f64 f = as<f64>(k) * sample_rate / fft_f;
             f64 val = 0.0;
             if (f >= f_lo && f <= f_ce && f_ce > f_lo) {
                 val = (f - f_lo) / (f_ce - f_lo);
@@ -85,17 +85,17 @@ AudioStatus audio_delta(ArrayRef<f64> x, usize window_length, MutArrayRef<f64> y
         return AudioStatus::kInvalidArgument;
     }
 
-    const i64 m = static_cast<i64>(window_length / 2);
+    const i64 m = as<i64>(window_length / 2);
     f64 denom = 0.0;
     for (i64 i = 1; i <= m; ++i) {
-        denom += static_cast<f64>(i * i);
+        denom += as<f64>(i * i);
     }
     if (denom <= 0.0) denom = 1.0;
 
     ArenaTemp scratch = keel::get_scratch(alloc);
     Array<f64> b(window_length, scratch.allocator());
     for (usize k = 0; k < window_length; ++k) {
-        b[k] = static_cast<f64>(m - static_cast<i64>(k)) / denom;
+        b[k] = as<f64>(m - as<i64>(k)) / denom;
     }
     Array<f64> z(state_len, 0.0, scratch.allocator());
     if (!zi.empty()) {

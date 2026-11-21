@@ -27,8 +27,8 @@ FrameSpec make_frame_spec(usize n, f64 fs, f64 win_sec, f64 ov_sec) noexcept {
     if (w_i <= 0) {
         return s;
     }
-    s.win_len = static_cast<usize>(w_i);
-    s.overlap = (o_i > 0) ? static_cast<usize>(o_i) : 0;
+    s.win_len = as<usize>(w_i);
+    s.overlap = (o_i > 0) ? as<usize>(o_i) : 0;
     if (s.overlap >= s.win_len) {
         s.overlap = s.win_len - 1;
     }
@@ -72,7 +72,7 @@ void partial_power_lags(const f64* x, usize len, usize max_lag, f64* p_out) noex
 // Levinson-Durbin AR model from biased autocorrelation (order p).
 void lpc_levinson(const f64* x, usize len, usize p, f64* a_out, Allocator* scratch_alloc) {
     Array<f64> r(p + 1, 0.0, scratch_alloc);
-    const f64 inv_n = (len > 0) ? (1.0 / static_cast<f64>(len)) : 0.0;
+    const f64 inv_n = (len > 0) ? (1.0 / as<f64>(len)) : 0.0;
     for (usize k = 0; k <= p; ++k) {
         f64 s = 0.0;
         for (usize i = 0; i + k < len; ++i) {
@@ -118,8 +118,8 @@ void lpc_levinson(const f64* x, usize len, usize p, f64* a_out, Allocator* scrat
 
 AudioStatus pitch_ncf(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const FrameSpec& sp, MutArrayRef<f64> f0_out,
                       Allocator* alloc) {
-    const usize min_lag = static_cast<usize>(keel::floor(fs / max_f));
-    const usize ceil_max = static_cast<usize>(keel::ceil(fs / min_f));
+    const usize min_lag = as<usize>(keel::floor(fs / max_f));
+    const usize ceil_max = as<usize>(keel::ceil(fs / min_f));
     const usize max_lag = ((sp.win_len - 1) < ceil_max) ? (sp.win_len - 1) : ceil_max;
     if (max_lag <= min_lag) {
         for (usize f = 0; f < sp.num_frames; ++f) {
@@ -155,14 +155,14 @@ AudioStatus pitch_ncf(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
             }
         }
 
-        f64 lag = static_cast<f64>(best_lag);
+        f64 lag = as<f64>(best_lag);
         if (best_lag > min_lag && best_lag < max_lag) {
             const f64 a = r_buf[best_lag - 1] / (keel::sqrt(total * p_buf[best_lag - 1]) + 1e-300);
             const f64 b = best_val;
             const f64 c = r_buf[best_lag + 1] / (keel::sqrt(total * p_buf[best_lag + 1]) + 1e-300);
             const f64 denom = 2.0 * (2.0 * b - c - a);
             if (keel::abs(denom) > 1e-12) {
-                lag = static_cast<f64>(best_lag) - (a - c) / denom;
+                lag = as<f64>(best_lag) - (a - c) / denom;
             }
         }
         f0_out[f] = (lag > 0.0) ? (fs / lag) : 0.0;
@@ -195,7 +195,7 @@ AudioStatus pitch_cep(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     if (q_lo < 0) {
         q_lo = 0;
     }
-    const i64 q_max = static_cast<i64>(nfft) - 1;
+    const i64 q_max = as<i64>(nfft) - 1;
     if (q_hi > q_max) {
         q_hi = q_max;
     }
@@ -228,13 +228,13 @@ AudioStatus pitch_cep(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         i64 q_best = q_lo;
         f64 c_best = -Limits<f64>::infinity();
         for (i64 q = q_lo; q <= q_hi; ++q) {
-            const f64 cq = cep[static_cast<usize>(q)];
+            const f64 cq = cep[as<usize>(q)];
             if (cq > c_best) {
                 c_best = cq;
                 q_best = q;
             }
         }
-        f0_out[f] = fs / static_cast<f64>(q_best + 1);
+        f0_out[f] = fs / as<f64>(q_best + 1);
     }
     return AudioStatus::kOk;
 }
@@ -250,8 +250,8 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     const usize pbins = half + 1;
 
     const i64 j_lo = keel::ceil_i64(keel::log(0.5) / k_delta);
-    const i64 j_hi = keel::floor_i64(keel::log(static_cast<f64>(kK) + 0.5) / k_delta);
-    const usize taps = (j_hi >= j_lo) ? static_cast<usize>(j_hi - j_lo + 1) : 0;
+    const i64 j_hi = keel::floor_i64(keel::log(as<f64>(kK) + 0.5) / k_delta);
+    const usize taps = (j_hi >= j_lo) ? as<usize>(j_hi - j_lo + 1) : 0;
 
     if (taps == 0) {
         f64 mid = 0.5 * (min_f + max_f);
@@ -277,14 +277,14 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     Array<f64> g_tap(taps, scratch.allocator());
     f64 g_sum = 0.0;
     for (usize t = 0; t < taps; ++t) {
-        const f64 q = static_cast<f64>(j_lo + static_cast<i64>(t)) * k_delta;
+        const f64 q = as<f64>(j_lo + as<i64>(t)) * k_delta;
         const f64 r = keel::exp(q);
         const f64 g = keel::log(kGamma - keel::cos(kTau * r));
         r_tap[t] = r;
         g_tap[t] = g;
         g_sum += g;
     }
-    const f64 beta = g_sum / static_cast<f64>(taps);
+    const f64 beta = g_sum / as<f64>(taps);
     Array<f64> h_tap(taps, scratch.allocator());
     for (usize t = 0; t < taps; ++t) {
         h_tap[t] = beta - g_tap[t];
@@ -292,7 +292,7 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
 
     const i64 m_lo = keel::ceil_i64(keel::log(min_f) / k_delta);
     const i64 m_hi = keel::floor_i64(keel::log(max_f) / k_delta);
-    const f64 df = fs / static_cast<f64>(nfft);
+    const f64 df = fs / as<f64>(nfft);
 
     Array<f64> frame(nfft, 0.0, scratch.allocator());
     Array<c64> half_spec(pbins, scratch.allocator());
@@ -317,7 +317,7 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         f64 best_f0 = 0.5 * (min_f + max_f);
 
         for (i64 m = m_lo; m <= m_hi; ++m) {
-            const f64 f0 = keel::exp(static_cast<f64>(m) * k_delta);
+            const f64 f0 = keel::exp(as<f64>(m) * k_delta);
             f64 score = 0.0;
             for (usize t = 0; t < taps; ++t) {
                 const f64 ftap = f0 * r_tap[t];
@@ -325,11 +325,11 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
                 if (ftap >= 0.0 && ftap <= 0.5 * fs) {
                     const f64 pos = ftap / df;
                     const i64 k0 = keel::floor_i64(pos);
-                    if (k0 >= 0 && static_cast<usize>(k0) < half) {
-                        const f64 frac = pos - static_cast<f64>(k0);
-                        const usize ku = static_cast<usize>(k0);
+                    if (k0 >= 0 && as<usize>(k0) < half) {
+                        const f64 frac = pos - as<f64>(k0);
+                        const usize ku = as<usize>(k0);
                         p_val = p_frame[ku] * (1.0 - frac) + p_frame[ku + 1] * frac;
-                    } else if (k0 >= 0 && static_cast<usize>(k0) == half) {
+                    } else if (k0 >= 0 && as<usize>(k0) == half) {
                         p_val = p_frame[half];
                     }
                 }
@@ -368,10 +368,10 @@ AudioStatus pitch_lhs(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     if (j_hi_raw < j_lo_raw) {
         return AudioStatus::kInvalidArgument;
     }
-    const usize j_lo = static_cast<usize>(j_lo_raw);
-    const usize j_hi = static_cast<usize>(j_hi_raw);
-    const usize nfft = static_cast<usize>(nfft_i);
-    const usize k_bins = static_cast<usize>(k_max_bin);
+    const usize j_lo = as<usize>(j_lo_raw);
+    const usize j_hi = as<usize>(j_hi_raw);
+    const usize nfft = as<usize>(nfft_i);
+    const usize k_bins = as<usize>(k_max_bin);
 
     ArenaTemp scratch = keel::get_scratch(alloc);
     Array<f64> win(sp.win_len, scratch.allocator());
@@ -411,7 +411,7 @@ AudioStatus pitch_lhs(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         f64 best_sum = -Limits<f64>::infinity();
         for (usize j = j_lo; j <= j_hi; ++j) {
             f64 sum = 0.0;
-            for (usize m = 1; m <= static_cast<usize>(kH); ++m) {
+            for (usize m = 1; m <= as<usize>(kH); ++m) {
                 sum += log_mag[j * m];
             }
             if (sum > best_sum) {
@@ -420,7 +420,7 @@ AudioStatus pitch_lhs(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
             }
         }
 
-        f64 f0 = static_cast<f64>(best_j) + 1.0;
+        f64 f0 = as<f64>(best_j) + 1.0;
         if (f0 < min_f) f0 = min_f;
         if (f0 > max_f) f0 = max_f;
         f0_out[f] = f0;
@@ -441,13 +441,13 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         return AudioStatus::kOk;
     }
 
-    const usize nfft = static_cast<usize>(nfft_i);
+    const usize nfft = as<usize>(nfft_i);
     ArenaTemp scratch = keel::get_scratch(alloc);
 
     Array<f64> hann(sp.win_len, scratch.allocator());
-    const f64 wl_f = static_cast<f64>(sp.win_len);
+    const f64 wl_f = as<f64>(sp.win_len);
     for (usize n = 0; n < sp.win_len; ++n) {
-        hann[n] = 0.5 * (1.0 - keel::cos(kTau * static_cast<f64>(n) / wl_f));
+        hann[n] = 0.5 * (1.0 - keel::cos(kTau * as<f64>(n) / wl_f));
     }
 
     auto plan_res = fft::FftPlan1D::create(nfft, scratch.allocator());
@@ -495,12 +495,12 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
 
     auto srh_score = [&](usize f, i64 cand) -> f64 {
         const f64* e_row = e_spec.data() + f * nfft;
-        f64 score = e_row[static_cast<usize>(cand)];
+        f64 score = e_row[as<usize>(cand)];
         for (i64 k = 2; k <= kNharm; ++k) {
             const i64 hi = k * cand;
-            const i64 mid = keel::round_i64((static_cast<f64>(k) - 0.5) * static_cast<f64>(cand));
-            const f64 e_hi = (hi >= 0 && hi < nfft_i) ? e_row[static_cast<usize>(hi)] : 0.0;
-            const f64 e_mid = (mid >= 0 && mid < nfft_i) ? e_row[static_cast<usize>(mid)] : 0.0;
+            const i64 mid = keel::round_i64((as<f64>(k) - 0.5) * as<f64>(cand));
+            const f64 e_hi = (hi >= 0 && hi < nfft_i) ? e_row[as<usize>(hi)] : 0.0;
+            const f64 e_mid = (mid >= 0 && mid < nfft_i) ? e_row[as<usize>(mid)] : 0.0;
             score += e_hi - e_mid;
         }
         return score;
@@ -525,10 +525,10 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     Array<f64> f0_tmp(sp.num_frames, scratch.allocator());
     f64 sum_pass1 = 0.0;
     for (usize f = 0; f < sp.num_frames; ++f) {
-        f0_tmp[f] = static_cast<f64>(best_cand(f, lo_full, hi_full));
+        f0_tmp[f] = as<f64>(best_cand(f, lo_full, hi_full));
         sum_pass1 += f0_tmp[f];
     }
-    const f64 f0_mean = sum_pass1 / static_cast<f64>(sp.num_frames);
+    const f64 f0_mean = sum_pass1 / as<f64>(sp.num_frames);
 
     if (keel::is_finite(f0_mean) && f0_mean > 0.0) {
         const i64 lo_cand = keel::round_i64(0.5 * f0_mean);
@@ -537,7 +537,7 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         const i64 hi_ref = (hi_full < hi_cand) ? hi_full : hi_cand;
         if (lo_ref <= hi_ref) {
             for (usize f = 0; f < sp.num_frames; ++f) {
-                f0_tmp[f] = static_cast<f64>(best_cand(f, lo_ref, hi_ref));
+                f0_tmp[f] = as<f64>(best_cand(f, lo_ref, hi_ref));
             }
         }
     }
@@ -622,10 +622,10 @@ AudioStatus harmonic_ratio(ArrayRef<f64> x, f64 sample_rate, MutArrayRef<f64> hr
 
         usize low_edge = max_lag;
         const f64 r0 = r_buf[0];
-        const i8 prev_sign = (r0 > 0.0) ? static_cast<i8>(1) : (r0 < 0.0 ? static_cast<i8>(-1) : static_cast<i8>(0));
+        const i8 prev_sign = (r0 > 0.0) ? as<i8>(1) : (r0 < 0.0 ? as<i8>(-1) : as<i8>(0));
         for (usize k = 1; k < m_lag; ++k) {
-            const i8 s = (r_buf[k] > 0.0) ? static_cast<i8>(1)
-                                          : (r_buf[k] < 0.0 ? static_cast<i8>(-1) : static_cast<i8>(0));
+            const i8 s = (r_buf[k] > 0.0) ? as<i8>(1)
+                                          : (r_buf[k] < 0.0 ? as<i8>(-1) : as<i8>(0));
             if (s != prev_sign) {
                 low_edge = k + 1;
                 break;

@@ -102,7 +102,7 @@ f64 spectral_decrease(ArrayRef<f64> spectrum) noexcept {
     f64 num = 0.0;
     f64 den = 0.0;
     for (usize k = 1; k < m; ++k) {
-        num += (spectrum[k] - x0) / static_cast<f64>(k);
+        num += (spectrum[k] - x0) / as<f64>(k);
         den += spectrum[k];
     }
     return (den > 0.0) ? (num / den) : 0.0;
@@ -117,7 +117,7 @@ f64 spectral_slope(ArrayRef<f64> spectrum, ArrayRef<f64> freqs) noexcept {
         mean_f += freqs[i];
         mean_x += spectrum[i];
     }
-    const f64 mf = static_cast<f64>(m);
+    const f64 mf = as<f64>(m);
     mean_f /= mf;
     mean_x /= mf;
     f64 num = 0.0;
@@ -139,7 +139,7 @@ f64 spectral_crest(ArrayRef<f64> spectrum) noexcept {
         if (spectrum[i] > mx) mx = spectrum[i];
         sm += spectrum[i];
     }
-    const f64 mean = sm / static_cast<f64>(m);
+    const f64 mean = sm / as<f64>(m);
     return (mean > 0.0) ? (mx / mean) : 0.0;
 }
 
@@ -159,7 +159,7 @@ f64 spectral_entropy(ArrayRef<f64> spectrum) noexcept {
             h -= q * keel::log(q) * inv_log2;
         }
     }
-    return h / (keel::log(static_cast<f64>(m)) * inv_log2);
+    return h / (keel::log(as<f64>(m)) * inv_log2);
 }
 
 f64 spectral_flatness(ArrayRef<f64> spectrum) noexcept {
@@ -172,7 +172,7 @@ f64 spectral_flatness(ArrayRef<f64> spectrum) noexcept {
         sum_log += keel::log(spectrum[i] + eps);
         sum_x += spectrum[i];
     }
-    const f64 mf = static_cast<f64>(m);
+    const f64 mf = as<f64>(m);
     const f64 geom = keel::exp(sum_log / mf);
     const f64 arith = sum_x / mf;
     return (arith > 0.0) ? (geom / arith) : 0.0;
