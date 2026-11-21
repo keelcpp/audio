@@ -2,7 +2,7 @@
 
 #include "keel/arena.h"
 
-namespace keel {
+namespace keel::audio {
 
 bool is_aiff_bytes(ArrayRef<u8> bytes) noexcept {
     if (bytes.size() < 12) return false;
@@ -602,4 +602,4 @@ Result<Array<u8>> encode_aiff(const AudioView& view, const AudioEncodeOptions& o
     return out;
 }
 
-} // namespace keel
+} // namespace keel::audio

@@ -4,7 +4,7 @@
 #include "keel/result.h"
 #include "keel/string.h"
 
-namespace keel {
+namespace keel::audio {
 
 struct MidiNote {
     u16 track = 0;
@@ -43,4 +43,4 @@ struct MidiEncodeOptions {
 [[nodiscard]] Result<Array<MidiNote>> read_midi(StringRef path, Allocator* alloc = nullptr);
 Error write_midi(StringRef path, ArrayRef<MidiNote> notes, const MidiEncodeOptions& opts = {});
 
-} // namespace keel
+} // namespace keel::audio

@@ -9,6 +9,7 @@
 #include <cstring>
 
 using namespace keel;
+using namespace keel::audio;
 
 namespace {
 

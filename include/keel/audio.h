@@ -4,7 +4,7 @@
 #include "keel/result.h"
 #include "keel/string.h"
 
-namespace keel {
+namespace keel::audio {
 
 inline constexpr u64 kDefaultMaxAudioFrames = 512ULL * 1024 * 1024;
 
@@ -262,4 +262,4 @@ struct AudioEncodeOptions {
 [[nodiscard]] Result<Array<u8>> encode_au(const AudioView& view, const AudioEncodeOptions& opts = {});
 Error write_audio(StringRef path, const AudioView& view, const AudioEncodeOptions& opts = {});
 
-} // namespace keel
+} // namespace keel::audio

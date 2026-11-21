@@ -2,7 +2,7 @@
 
 #include "keel/arena.h"
 
-namespace keel {
+namespace keel::audio {
 
 bool is_mp3_bytes(ArrayRef<u8> bytes) noexcept {
     if (bytes.size() < 4) return false;
@@ -659,4 +659,4 @@ Result<AudioBuffer> decode_mp3(ArrayRef<u8> bytes, const AudioDecodeOptions& opt
     return res;
 }
 
-} // namespace keel
+} // namespace keel::audio

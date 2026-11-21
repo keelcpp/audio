@@ -2,7 +2,7 @@
 
 #include "keel/arena.h"
 
-namespace keel {
+namespace keel::audio {
 
 bool is_wav_bytes(ArrayRef<u8> bytes) noexcept {
     if (bytes.size() < 12) return false;
@@ -483,4 +483,4 @@ Result<Array<u8>> encode_wav(const AudioView& view, const AudioEncodeOptions& op
     return out;
 }
 
-} // namespace keel
+} // namespace keel::audio

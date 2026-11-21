@@ -1,6 +1,6 @@
 #include "audio_internal.h"
 
-namespace keel {
+namespace keel::audio {
 
 bool is_au_bytes(ArrayRef<u8> bytes) noexcept {
     if (bytes.size() < 4) return false;
@@ -385,4 +385,4 @@ Result<Array<u8>> encode_au(const AudioView& view, const AudioEncodeOptions& opt
     return out;
 }
 
-} // namespace keel
+} // namespace keel::audio

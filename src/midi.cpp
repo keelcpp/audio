@@ -4,7 +4,7 @@
 #include "keel/arena.h"
 #include "keel/fs.h"
 
-namespace keel {
+namespace keel::audio {
 
 MidiInfo MidiInfo::clone(Allocator* alloc) const {
     MidiInfo copy;
@@ -537,4 +537,4 @@ Error write_midi(StringRef path, ArrayRef<MidiNote> notes, const MidiEncodeOptio
     return fs_write_file(path, encoded);
 }
 
-} // namespace keel
+} // namespace keel::audio

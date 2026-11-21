@@ -2,7 +2,7 @@
 
 #include "keel/arena.h"
 
-namespace keel {
+namespace keel::audio {
 
 bool is_flac_bytes(ArrayRef<u8> bytes) noexcept {
     if (bytes.size() < 4) return false;
@@ -661,4 +661,4 @@ Result<AudioBuffer> decode_flac(ArrayRef<u8> bytes, const AudioDecodeOptions& op
     return res;
 }
 
-} // namespace keel
+} // namespace keel::audio

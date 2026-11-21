@@ -6,7 +6,7 @@
 
 #include <cmath>
 
-namespace keel::audio_detail {
+namespace keel::audio::audio_detail {
 
 [[nodiscard]] inline u16 read_u16_le(const u8* p) noexcept {
     return static_cast<u16>(static_cast<u16>(p[0]) | (static_cast<u16>(p[1]) << 8));
@@ -393,4 +393,4 @@ struct FrameWindow {
     return static_cast<i32>(std::llround(s * 2147483647.0));
 }
 
-} // namespace keel::audio_detail
+} // namespace keel::audio::audio_detail

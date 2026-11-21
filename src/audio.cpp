@@ -3,7 +3,7 @@
 #include "keel/arena.h"
 #include "keel/fs.h"
 
-namespace keel {
+namespace keel::audio {
 
 AudioMetadata AudioMetadata::clone(Allocator* alloc) const {
     AudioMetadata copy;
@@ -166,4 +166,4 @@ Error write_audio(StringRef path, const AudioView& view, const AudioEncodeOption
     return fs_write_file(path, encoded);
 }
 
-} // namespace keel
+} // namespace keel::audio
