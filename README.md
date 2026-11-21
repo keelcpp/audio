@@ -1,14 +1,19 @@
-# keelcpp/audio
+# keel::audio
 
-Lightweight C++20 audio & MIDI container codecs built on [`keelcpp/keel`](https://github.com/keelcpp/keel) under the `0BSD` license.
+Zero-STL C++20 audio DSP & acoustic feature extraction kernels built on [`keel`](https://github.com/keelcpp/keel).
+
+> Note: Audio file codecs (WAV, FLAC, MP3, AIFF, AU, MIDI) live in [`keelcpp/audiofile`](https://github.com/keelcpp/audiofile).
 
 ## Features
 
-- **Audio Formats:** RIFF/WAVE (`WAV`), `FLAC`, MPEG-1/2/2.5 Layer III (`MP3`), `AIFF` / `AIFF-C`, and Sun/NeXT `AU` / `SND`.
-- **MIDI:** Standard MIDI File (`SMF` Format 0 & 1) peeking, note decoding with tempo-map & running-status support, and Format 0 encoding.
-- **Flexible Buffers:** Interleaved and planar channel layouts, normalized `f64` or native `u8` / `i8` / `i16` / `i32` / `f32` / `f64` sample types, frame-range slicing, and embedded metadata (`title`, `artist`, `comment`).
-- **Zero STL header bloat & exception-neutral:** compiles cleanly with `-fno-exceptions -fno-rtti`, uses explicit `keel::Allocator*` and thread-local `keel::Arena` scratch memory.
+- **Perceptual scales**: Mel (O'Shaughnessy), Bark (Traunmüller), ERB (Glasberg & Moore), Phon/Sone loudness (ISO 532-1 & ISO 532-2).
+- **Spectral shape descriptors**: centroid, spread, skewness, kurtosis, rolloff point, decrease, slope, crest, entropy, flatness, and spectral flux (real & complex).
+- **Audio features**: periodic Hamming window, bandwidth-normalized triangular Mel filterbank, and Furui regression `audio_delta` with streaming `zi`/`zf` state.
 
-## CMake Integration
+## Build & Test
 
-Links as `keel::audio` (`find_package(keel_audio)` or `FetchContent`).
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```

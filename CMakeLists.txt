@@ -1,9 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(keel_audio VERSION 0.1.0 LANGUAGES CXX)
+project(keel_audio VERSION 0.2.0 LANGUAGES CXX)
 
 option(KEEL_AUDIO_NO_EXCEPTIONS_RTTI "Compile keel_audio without C++ exceptions and RTTI" OFF)
 option(KEEL_AUDIO_BUILD_TESTS "Build keel_audio unit tests and header purity checks" ${PROJECT_IS_TOP_LEVEL})
-option(KEEL_AUDIO_UNITY_BUILD "Compile keel_audio with CMake UNITY_BUILD enabled" OFF)
 
 if(NOT TARGET keel::keel)
     find_package(keel QUIET CONFIG)
@@ -13,27 +12,52 @@ if(NOT TARGET keel::keel)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../keel/CMakeLists.txt" AND NOT DEFINED FETCHCONTENT_SOURCE_DIR_KEEL)
         set(FETCHCONTENT_SOURCE_DIR_KEEL "${CMAKE_CURRENT_SOURCE_DIR}/../keel" CACHE PATH "Local keel checkout")
     endif()
-    set(KEEL_NO_EXCEPTIONS_RTTI ${KEEL_AUDIO_NO_EXCEPTIONS_RTTI} CACHE BOOL "" FORCE)
+    if(KEEL_AUDIO_NO_EXCEPTIONS_RTTI)
+        set(KEEL_NO_EXCEPTIONS_RTTI ON CACHE BOOL "" FORCE)
+    endif()
     FetchContent_Declare(
         keel
         GIT_REPOSITORY https://github.com/keelcpp/keel.git
-        GIT_TAG        ca7fb3ed8f781d0b7af113422cdaa70a6da6eae4
+        GIT_TAG        f9fcebfba18d98d2c14c8e62a1913412f1299220
     )
     FetchContent_MakeAvailable(keel)
 endif()
 
+if(NOT TARGET keel::interp)
+    find_package(keel_interp QUIET CONFIG)
+    if(TARGET keel::keel_interp AND NOT TARGET keel::interp)
+        add_library(keel::interp ALIAS keel::keel_interp)
+    endif()
+endif()
+if(NOT TARGET keel::interp)
+    include(FetchContent)
+    set(KEEL_INTERP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../interp/CMakeLists.txt" AND NOT DEFINED FETCHCONTENT_SOURCE_DIR_KEEL_INTERP)
+        set(FETCHCONTENT_SOURCE_DIR_KEEL_INTERP "${CMAKE_CURRENT_SOURCE_DIR}/../interp" CACHE PATH "Local keel_interp checkout")
+    endif()
+    if(KEEL_AUDIO_NO_EXCEPTIONS_RTTI)
+        set(KEEL_INTERP_NO_EXCEPTIONS_RTTI ON CACHE BOOL "" FORCE)
+    endif()
+    FetchContent_Declare(
+        keel_interp
+        GIT_REPOSITORY https://github.com/keelcpp/interp.git
+        GIT_TAG        2dbf567058259e18c729bdc5dee5427b8f565395
+    )
+    FetchContent_MakeAvailable(keel_interp)
+endif()
+
 add_library(keel_audio STATIC
-    src/audio.cpp
-    src/wav.cpp
-    src/flac.cpp
-    src/mp3.cpp
-    src/aiff.cpp
-    src/au.cpp
-    src/midi.cpp
+    src/scales.cpp
+    src/descriptors.cpp
+    src/features.cpp
 )
 add_library(keel::audio ALIAS keel_audio)
 
-target_link_libraries(keel_audio PUBLIC keel::keel)
+target_link_libraries(keel_audio
+    PUBLIC  keel::keel
+    PRIVATE keel::interp
+)
+
 target_compile_features(keel_audio PUBLIC cxx_std_20)
 set_target_properties(keel_audio PROPERTIES
     CXX_STANDARD 20
@@ -41,9 +65,6 @@ set_target_properties(keel_audio PROPERTIES
     CXX_EXTENSIONS OFF
     POSITION_INDEPENDENT_CODE ON
 )
-if(KEEL_AUDIO_UNITY_BUILD)
-    set_target_properties(keel_audio PROPERTIES UNITY_BUILD ON)
-endif()
 
 target_include_directories(keel_audio PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -63,6 +84,17 @@ else()
     if(KEEL_AUDIO_NO_EXCEPTIONS_RTTI)
         target_compile_options(keel_audio PUBLIC -fno-exceptions -fno-rtti)
     endif()
+endif()
+
+if(COMMAND keel_enforce_guidelines)
+    keel_enforce_guidelines(keel_audio
+        SCOPE ALL
+        BAN_RAW_INTS ALL
+        HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        STANDALONE_HEADERS ${KEEL_AUDIO_BUILD_TESTS}
+        TEST_NAME test_guidelines_headers
+        WARNINGS OFF
+    )
 endif()
 
 include(CMakePackageConfigHelpers)
