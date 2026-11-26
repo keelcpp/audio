@@ -8,7 +8,13 @@ namespace keel::audio {
 
 void hamming_periodic(MutArrayRef<f64> out) noexcept {
     const usize n = out.size();
-    if (n == 0) return;
+    if (n == 0) {
+        return;
+    }
+    if (n == 1) {
+        out[0] = 1.0;
+        return;
+    }
     const f64 nf = as<f64>(n);
     for (usize i = 0; i < n; ++i) {
         out[i] = 0.54 - 0.46 * keel::cos(kTau * as<f64>(i) / nf);
@@ -24,8 +30,11 @@ AudioStatus mel_filterbank(f64 sample_rate, usize num_bands, usize fft_len,
     if (num_bands == 0) {
         return AudioStatus::kOk;
     }
+    if (num_bands >= Limits<usize>::kMax - 1) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize h = fft_len / 2 + 1;
-    if (fb_col_major.size() < num_bands * h || center_freqs_hz.size() < num_bands) {
+    if (num_bands > fb_col_major.size() / h || center_freqs_hz.size() < num_bands) {
         return AudioStatus::kInvalidArgument;
     }
 
@@ -70,7 +79,8 @@ AudioStatus mel_filterbank(f64 sample_rate, usize num_bands, usize fft_len,
 
 AudioStatus audio_delta(ArrayRef<f64> x, usize window_length, MutArrayRef<f64> y, ArrayRef<f64> zi,
                         MutArrayRef<f64> zf, Allocator* alloc) {
-    if (window_length < 3 || (window_length & 1u) == 0u) {
+    if (window_length < 3 || (window_length & 1u) == 0u ||
+        window_length > as<usize>(Limits<i64>::kMax)) {
         return AudioStatus::kInvalidArgument;
     }
     const usize n = x.size();
@@ -85,17 +95,21 @@ AudioStatus audio_delta(ArrayRef<f64> x, usize window_length, MutArrayRef<f64> y
         return AudioStatus::kInvalidArgument;
     }
 
-    const i64 m = as<i64>(window_length / 2);
+    const usize half = window_length / 2;
     f64 denom = 0.0;
-    for (i64 i = 1; i <= m; ++i) {
-        denom += as<f64>(i * i);
+    for (usize i = 1; i <= half; ++i) {
+        const f64 fi = as<f64>(i);
+        denom += fi * fi;
     }
-    if (denom <= 0.0) denom = 1.0;
+    if (!(denom > 0.0)) {
+        denom = 1.0;
+    }
 
     ArenaTemp scratch = keel::get_scratch(alloc);
     Array<f64> b(window_length, scratch.allocator());
+    const f64 half_f = as<f64>(half);
     for (usize k = 0; k < window_length; ++k) {
-        b[k] = as<f64>(m - as<i64>(k)) / denom;
+        b[k] = (half_f - as<f64>(k)) / denom;
     }
     Array<f64> z(state_len, 0.0, scratch.allocator());
     if (!zi.empty()) {
@@ -104,8 +118,24 @@ AudioStatus audio_delta(ArrayRef<f64> x, usize window_length, MutArrayRef<f64> y
         }
     }
 
+    // Copy input if y partially overlaps x at a higher address (`x < y < x + n`),
+    // where forward writes to y[i] would clobber unread x[j > i].
+    const f64* x_src = x.data();
+    Array<f64> x_copy(0, scratch.allocator());
+    if (n > 0 && x.data() != nullptr && y.data() != nullptr) {
+        const usize x_addr = reinterpret_cast<usize>(x.data());
+        const usize y_addr = reinterpret_cast<usize>(y.data());
+        if (y_addr > x_addr && (y_addr - x_addr) < n * sizeof(f64)) {
+            x_copy.resize(n);
+            for (usize i = 0; i < n; ++i) {
+                x_copy[i] = x[i];
+            }
+            x_src = x_copy.data();
+        }
+    }
+
     for (usize i = 0; i < n; ++i) {
-        const f64 xv = x[i];
+        const f64 xv = x_src[i];
         y[i] = b[0] * xv + z[0];
         for (usize k = 0; k + 1 < state_len; ++k) {
             z[k] = b[k + 1] * xv + z[k + 1];

@@ -17,14 +17,24 @@ struct FrameGeometry {
     usize num_frames = 0;
 };
 
+[[nodiscard]] bool mul_overflows(usize a, usize b) noexcept {
+    return a != 0 && b > Limits<usize>::kMax / a;
+}
+
 FrameGeometry compute_frame_geometry(usize num_samples, f64 sample_rate, f64 win_sec, f64 overlap_sec) noexcept {
     FrameGeometry g{};
     if (!(sample_rate > 0.0) || !keel::is_finite(sample_rate) || !(win_sec > 0.0) || !keel::is_finite(win_sec) ||
         !(overlap_sec >= 0.0) || !keel::is_finite(overlap_sec)) {
         return g;
     }
-    const i64 w_i = keel::round_i64(sample_rate * win_sec);
-    const i64 o_i = keel::round_i64(sample_rate * overlap_sec);
+    const f64 w_f = sample_rate * win_sec;
+    const f64 o_f = sample_rate * overlap_sec;
+    constexpr f64 kMaxSafeSamples = 4503599627370496.0; // 2^52
+    if (!keel::is_finite(w_f) || !keel::is_finite(o_f) || w_f >= kMaxSafeSamples || o_f >= kMaxSafeSamples) {
+        return g;
+    }
+    const i64 w_i = keel::round_i64(w_f);
+    const i64 o_i = keel::round_i64(o_f);
     if (w_i <= 0) {
         return g;
     }
@@ -36,6 +46,11 @@ FrameGeometry compute_frame_geometry(usize num_samples, f64 sample_rate, f64 win
     g.hop = (g.win_len > g.overlap) ? (g.win_len - g.overlap) : 1;
     g.num_frames = (num_samples >= g.win_len) ? ((num_samples - g.win_len) / g.hop + 1) : 0;
     return g;
+}
+
+[[nodiscard]] bool valid_rectification(CepstralRectification rect) noexcept {
+    return rect == CepstralRectification::kLog || rect == CepstralRectification::kCubicRoot ||
+           rect == CepstralRectification::kNone;
 }
 
 f64 rectify_value(f64 v, CepstralRectification rect, f64 log_floor) noexcept {
@@ -50,6 +65,32 @@ f64 rectify_value(f64 v, CepstralRectification rect, f64 log_floor) noexcept {
             return v;
     }
     return v;
+}
+
+[[nodiscard]] f64 safe_log_frame_energy(const f64* x, usize len) noexcept {
+    f64 max_abs = 0.0;
+    for (usize i = 0; i < len; ++i) {
+        const f64 ax = keel::abs(x[i]);
+        if (keel::is_nan(ax)) {
+            return kNaN;
+        }
+        if (ax > max_abs) {
+            max_abs = ax;
+        }
+    }
+    if (max_abs == 0.0) {
+        return keel::log(Limits<f64>::kMinPositive);
+    }
+    if (keel::is_inf(max_abs)) {
+        return kInf;
+    }
+    const f64 inv = 1.0 / max_abs;
+    f64 scaled_energy = 0.0;
+    for (usize i = 0; i < len; ++i) {
+        const f64 v = x[i] * inv;
+        scaled_energy += v * v;
+    }
+    return 2.0 * keel::log(max_abs) + keel::log(scaled_energy);
 }
 
 void build_dct2_basis(usize num_bands, usize num_coeffs, MutArrayRef<f64> basis_col_major) noexcept {
@@ -136,7 +177,7 @@ AudioStatus slaney_mel_filterbank(f64 sample_rate, usize fft_len, ArrayRef<f64> 
     }
     const usize h = fft_len / 2 + 1;
     const usize num_bands = edges.size() - 2;
-    if (fb_col_major.size() < h * num_bands) {
+    if (num_bands > fb_col_major.size() / h) {
         return AudioStatus::kInvalidArgument;
     }
 
@@ -150,11 +191,14 @@ AudioStatus slaney_mel_filterbank(f64 sample_rate, usize fft_len, ArrayRef<f64> 
         const f64 left = edges[k];
         const f64 centre = edges[k + 1];
         const f64 right = edges[k + 2];
+        if (!keel::is_finite(left) || !keel::is_finite(centre) || !keel::is_finite(right)) {
+            continue;
+        }
 
         const f64 rise_w = centre - left;
         const f64 fall_w = right - centre;
         const f64 base_w = right - left;
-        if (rise_w <= 0.0 || fall_w <= 0.0 || base_w <= 0.0) {
+        if (!(rise_w > 0.0) || !(fall_w > 0.0) || !(base_w > 0.0)) {
             continue;
         }
 
@@ -184,8 +228,14 @@ AudioStatus gammatone_filterbank(f64 sample_rate, ArrayRef<f64> center_freqs_hz,
         return AudioStatus::kOk;
     }
     const usize h = fft_len / 2 + 1;
-    if (fb_row_major.size() < num_bands * h) {
+    if (num_bands > fb_row_major.size() / h) {
         return AudioStatus::kInvalidArgument;
+    }
+    for (usize i = 0; i < num_bands; ++i) {
+        const f64 cf = center_freqs_hz[i];
+        if (!keel::is_finite(cf) || cf < 0.0) {
+            return AudioStatus::kInvalidArgument;
+        }
     }
 
     const f64 t = 1.0 / sample_rate;
@@ -204,28 +254,36 @@ AudioStatus gammatone_filterbank(f64 sample_rate, ArrayRef<f64> center_freqs_hz,
         const f64 cos_arg = kTau * cf * t;
         const f64 cos_t = keel::cos(cos_arg);
         const f64 sin_t = keel::sin(cos_arg);
-        const f64 exp_bt = keel::exp(b_rad * t);
+        const f64 exp_mbt = keel::exp(-b_rad * t);
         const f64 exp_m2bt = keel::exp(-2.0 * b_rad * t);
 
         const f64 a0 = t;
-        const f64 a11 = -(2.0 * t * cos_t / exp_bt + 2.0 * s32a * t * sin_t / exp_bt) * 0.5;
-        const f64 a12 = -(2.0 * t * cos_t / exp_bt - 2.0 * s32a * t * sin_t / exp_bt) * 0.5;
-        const f64 a13 = -(2.0 * t * cos_t / exp_bt + 2.0 * s32b * t * sin_t / exp_bt) * 0.5;
-        const f64 a14 = -(2.0 * t * cos_t / exp_bt - 2.0 * s32b * t * sin_t / exp_bt) * 0.5;
+        const f64 a11 = -(2.0 * t * cos_t * exp_mbt + 2.0 * s32a * t * sin_t * exp_mbt) * 0.5;
+        const f64 a12 = -(2.0 * t * cos_t * exp_mbt - 2.0 * s32a * t * sin_t * exp_mbt) * 0.5;
+        const f64 a13 = -(2.0 * t * cos_t * exp_mbt + 2.0 * s32b * t * sin_t * exp_mbt) * 0.5;
+        const f64 a14 = -(2.0 * t * cos_t * exp_mbt - 2.0 * s32b * t * sin_t * exp_mbt) * 0.5;
         const f64 b0 = 1.0;
-        const f64 b1 = -2.0 * cos_t / exp_bt;
+        const f64 b1 = -2.0 * cos_t * exp_mbt;
         const f64 b2 = exp_m2bt;
 
         const c64 exp4j = keel::exp(c64(0.0, 2.0 * cos_arg));
-        const c64 exp_2j = keel::exp(c64(0.0, cos_arg)) / exp_bt;
+        const c64 exp_2j = keel::exp(c64(0.0, cos_arg)) * exp_mbt;
         const c64 term1 = -2.0 * exp4j * t + 2.0 * exp_2j * t * (cos_t - s32b * sin_t);
         const c64 term2 = -2.0 * exp4j * t + 2.0 * exp_2j * t * (cos_t + s32b * sin_t);
         const c64 term3 = -2.0 * exp4j * t + 2.0 * exp_2j * t * (cos_t - s32a * sin_t);
         const c64 term4 = -2.0 * exp4j * t + 2.0 * exp_2j * t * (cos_t + s32a * sin_t);
-        const c64 denom_simple = -2.0 / keel::exp(2.0 * b_rad * t) - 2.0 * exp4j + 2.0 * (c64(1.0, 0.0) + exp4j) / exp_bt;
+        const c64 denom_simple = -2.0 * exp_m2bt - 2.0 * exp4j + 2.0 * (c64(1.0, 0.0) + exp4j) * exp_mbt;
         const c64 denom2 = denom_simple * denom_simple;
         const c64 denom4 = denom2 * denom2;
         const f64 gain = keel::abs((term1 * term2 * term3 * term4) / denom4);
+
+        f64* row = fb_row_major.data() + i * h;
+        if (!(gain > 0.0) || !keel::is_finite(gain)) {
+            for (usize k = 0; k < h; ++k) {
+                row[k] = 0.0;
+            }
+            continue;
+        }
 
         const f64 b0_1 = a0 / gain;
         const f64 b1_1 = a11 / gain;
@@ -236,7 +294,6 @@ AudioStatus gammatone_filterbank(f64 sample_rate, ArrayRef<f64> center_freqs_hz,
             scale = (bw > 0.0) ? (2.0 / bw) : 0.0;
         }
 
-        f64* row = fb_row_major.data() + i * h;
         const f64 nfft_f = as<f64>(fft_len);
         for (usize k = 0; k < h; ++k) {
             const f64 w = -kTau * as<f64>(k) / nfft_f;
@@ -259,11 +316,15 @@ AudioStatus gammatone_filterbank(f64 sample_rate, ArrayRef<f64> center_freqs_hz,
 AudioStatus cepstral_coefficients(ArrayRef<f64> spectra_col_major, usize num_bands, usize num_frames,
                                   usize num_coeffs, MutArrayRef<f64> coeffs_col_major,
                                   CepstralRectification rect, Allocator* alloc) {
-    if (num_coeffs <= 1) {
+    if (num_coeffs <= 1 || !valid_rectification(rect)) {
         return AudioStatus::kInvalidArgument;
     }
     if (num_bands == 0 || num_frames == 0) {
         return AudioStatus::kOk;
+    }
+    if (mul_overflows(num_bands, num_frames) || mul_overflows(num_frames, num_coeffs) ||
+        mul_overflows(num_coeffs, num_bands)) {
+        return AudioStatus::kInvalidArgument;
     }
     const usize in_total = num_bands * num_frames;
     const usize out_total = num_frames * num_coeffs;
@@ -305,11 +366,15 @@ AudioStatus cepstral_coefficients(ArrayRef<f64> spectra_col_major, usize num_ban
 AudioStatus cepstral_coefficients_f32(ArrayRef<f32> spectra_col_major, usize num_bands, usize num_frames,
                                       usize num_coeffs, MutArrayRef<f32> coeffs_col_major,
                                       CepstralRectification rect, Allocator* alloc) {
-    if (num_coeffs <= 1) {
+    if (num_coeffs <= 1 || !valid_rectification(rect)) {
         return AudioStatus::kInvalidArgument;
     }
     if (num_bands == 0 || num_frames == 0) {
         return AudioStatus::kOk;
+    }
+    if (mul_overflows(num_bands, num_frames) || mul_overflows(num_frames, num_coeffs) ||
+        mul_overflows(num_coeffs, num_bands)) {
+        return AudioStatus::kInvalidArgument;
     }
     const usize in_total = num_bands * num_frames;
     const usize out_total = num_frames * num_coeffs;
@@ -329,7 +394,7 @@ AudioStatus cepstral_coefficients_f32(ArrayRef<f32> spectra_col_major, usize num
     Array<f64> basis(num_coeffs * num_bands, scratch.allocator());
     build_dct2_basis(num_bands, num_coeffs, basis);
 
-    const f64 log_floor = keel::log10(Limits<f64>::kMinPositive);
+    const f64 log_floor = keel::log10(as<f64>(Limits<f32>::kMinPositive));
     Array<f32> rectified(in_total, scratch.allocator());
     for (usize i = 0; i < in_total; ++i) {
         rectified[i] = as<f32>(rectify_value(as<f64>(spectra_col_major[i]), rect, log_floor));
@@ -350,7 +415,8 @@ AudioStatus cepstral_coefficients_f32(ArrayRef<f32> spectra_col_major, usize num
 
 AudioStatus mfcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef<f64> coeffs_col_major,
                  MutArrayRef<f64> delta_col_major, MutArrayRef<f64> delta_delta_col_major, Allocator* alloc) {
-    if (!(sample_rate > 0.0) || !keel::is_finite(sample_rate) || num_coeffs <= 1) {
+    if (!(sample_rate > 0.0) || !keel::is_finite(sample_rate) || num_coeffs <= 1 ||
+        num_coeffs == Limits<usize>::kMax) {
         return AudioStatus::kInvalidArgument;
     }
 
@@ -359,16 +425,28 @@ AudioStatus mfcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
         return AudioStatus::kOk;
     }
     const usize num_cols = num_coeffs + 1;
+    constexpr usize kNumEdges = 42;
+    constexpr usize kNumBands = kNumEdges - 2;
+    if (mul_overflows(fg.num_frames, num_cols) || mul_overflows(kNumBands, fg.num_frames)) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize out_total = fg.num_frames * num_cols;
     if (coeffs_col_major.size() < out_total) {
+        return AudioStatus::kInvalidArgument;
+    }
+    if (!delta_col_major.empty() && delta_col_major.size() < out_total) {
+        return AudioStatus::kInvalidArgument;
+    }
+    if (!delta_delta_col_major.empty() && delta_delta_col_major.size() < out_total) {
         return AudioStatus::kInvalidArgument;
     }
 
     ArenaTemp scratch = keel::get_scratch(alloc);
     const usize fft_len = fg.win_len;
     const usize h = fft_len / 2 + 1;
-    constexpr usize kNumEdges = 42;
-    constexpr usize kNumBands = kNumEdges - 2;
+    if (mul_overflows(h, kNumBands)) {
+        return AudioStatus::kInvalidArgument;
+    }
 
     Array<f64> win(fg.win_len, scratch.allocator());
     hamming_periodic(win);
@@ -396,16 +474,10 @@ AudioStatus mfcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
 
     for (usize f = 0; f < fg.num_frames; ++f) {
         const usize start = f * fg.hop;
-        f64 energy = 0.0;
+        log_e[f] = safe_log_frame_energy(x.data() + start, fg.win_len);
         for (usize i = 0; i < fg.win_len; ++i) {
-            const f64 xi = x[start + i];
-            energy += xi * xi;
-            frame[i] = xi * win[i];
+            frame[i] = x[start + i] * win[i];
         }
-        if (energy == 0.0) {
-            energy = Limits<f64>::kMinPositive;
-        }
-        log_e[f] = keel::log(energy);
 
         plan.exec_rfft(frame, half_spec);
         for (usize j = 0; j < h; ++j) {
@@ -445,7 +517,8 @@ AudioStatus mfcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
 
 AudioStatus gtcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef<f64> coeffs_col_major,
                  MutArrayRef<f64> delta_col_major, MutArrayRef<f64> delta_delta_col_major, Allocator* alloc) {
-    if (!(sample_rate > 0.0) || !keel::is_finite(sample_rate) || num_coeffs <= 1) {
+    if (!(sample_rate > 0.0) || !keel::is_finite(sample_rate) || num_coeffs <= 1 ||
+        num_coeffs == Limits<usize>::kMax) {
         return AudioStatus::kInvalidArgument;
     }
 
@@ -461,14 +534,24 @@ AudioStatus gtcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
         return AudioStatus::kOk;
     }
     const usize num_cols = num_coeffs + 1;
+    const usize fft_len = fg.win_len;
+    const usize h = fft_len / 2 + 1;
+    if (mul_overflows(fg.num_frames, num_cols) || mul_overflows(num_bands, h) ||
+        mul_overflows(num_bands, fg.num_frames)) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize out_total = fg.num_frames * num_cols;
     if (coeffs_col_major.size() < out_total) {
         return AudioStatus::kInvalidArgument;
     }
+    if (!delta_col_major.empty() && delta_col_major.size() < out_total) {
+        return AudioStatus::kInvalidArgument;
+    }
+    if (!delta_delta_col_major.empty() && delta_delta_col_major.size() < out_total) {
+        return AudioStatus::kInvalidArgument;
+    }
 
     ArenaTemp scratch = keel::get_scratch(alloc);
-    const usize fft_len = fg.win_len;
-    const usize h = fft_len / 2 + 1;
 
     Array<f64> win(fg.win_len, scratch.allocator());
     hamming_periodic(win);
@@ -504,16 +587,10 @@ AudioStatus gtcc(ArrayRef<f64> x, f64 sample_rate, usize num_coeffs, MutArrayRef
     const bool nyquist_single = ((fft_len & 1u) == 0u);
     for (usize f = 0; f < fg.num_frames; ++f) {
         const usize start = f * fg.hop;
-        f64 energy = 0.0;
+        log_e[f] = safe_log_frame_energy(x.data() + start, fg.win_len);
         for (usize i = 0; i < fg.win_len; ++i) {
-            const f64 xi = x[start + i];
-            energy += xi * xi;
-            frame[i] = xi * win[i];
+            frame[i] = x[start + i] * win[i];
         }
-        if (energy == 0.0) {
-            energy = Limits<f64>::kMinPositive;
-        }
-        log_e[f] = keel::log(energy);
 
         plan.exec_rfft(frame, half_spec);
         for (usize j = 0; j < h; ++j) {

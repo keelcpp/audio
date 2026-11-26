@@ -17,13 +17,23 @@ struct FrameSpec {
     usize num_frames = 0;
 };
 
+[[nodiscard]] bool mul_overflows(usize a, usize b) noexcept {
+    return a != 0 && b > Limits<usize>::kMax / a;
+}
+
 FrameSpec make_frame_spec(usize n, f64 fs, f64 win_sec, f64 ov_sec) noexcept {
     FrameSpec s{};
     if (!(fs > 0.0) || !keel::is_finite(fs)) {
         return s;
     }
-    const i64 w_i = keel::round_i64(fs * win_sec);
-    const i64 o_i = keel::round_i64(fs * ov_sec);
+    const f64 w_f = fs * win_sec;
+    const f64 o_f = fs * ov_sec;
+    constexpr f64 kMaxSafeSamples = 4503599627370496.0; // 2^52
+    if (!keel::is_finite(w_f) || !keel::is_finite(o_f) || w_f >= kMaxSafeSamples || o_f >= kMaxSafeSamples) {
+        return s;
+    }
+    const i64 w_i = keel::round_i64(w_f);
+    const i64 o_i = keel::round_i64(o_f);
     if (w_i <= 0) {
         return s;
     }
@@ -41,11 +51,29 @@ usize next_pow2(usize x) noexcept {
     if (x <= 1) {
         return 1;
     }
+    constexpr usize kMaxPow2 = usize{1} << (sizeof(usize) * 8 - 1);
+    if (x > kMaxPow2) {
+        return 0;
+    }
     usize p = 1;
     while (p < x) {
         p <<= 1;
     }
     return p;
+}
+
+[[nodiscard]] f64 frame_max_abs(const f64* x, usize len) noexcept {
+    f64 mx = 0.0;
+    for (usize i = 0; i < len; ++i) {
+        const f64 ax = keel::abs(x[i]);
+        if (keel::is_nan(ax)) {
+            return kNaN;
+        }
+        if (ax > mx) {
+            mx = ax;
+        }
+    }
+    return mx;
 }
 
 void autocorr_lags(const f64* x, usize len, usize max_lag, f64* r_out) noexcept {
@@ -71,21 +99,31 @@ void partial_power_lags(const f64* x, usize len, usize max_lag, f64* p_out) noex
 
 // Levinson-Durbin AR model from biased autocorrelation (order p).
 void lpc_levinson(const f64* x, usize len, usize p, f64* a_out, Allocator* scratch_alloc) {
-    Array<f64> r(p + 1, 0.0, scratch_alloc);
-    const f64 inv_n = (len > 0) ? (1.0 / as<f64>(len)) : 0.0;
-    for (usize k = 0; k <= p; ++k) {
-        f64 s = 0.0;
-        for (usize i = 0; i + k < len; ++i) {
-            s += x[i] * x[i + k];
-        }
-        r[k] = s * inv_n;
-    }
-
     for (usize i = 0; i <= p; ++i) {
         a_out[i] = 0.0;
     }
     a_out[0] = 1.0;
-    if (p == 0 || r[0] <= 0.0) {
+    if (p == 0 || len == 0) {
+        return;
+    }
+
+    const f64 max_x = frame_max_abs(x, len);
+    if (!(max_x > 0.0) || !keel::is_finite(max_x)) {
+        return;
+    }
+    const f64 inv_x = 1.0 / max_x;
+
+    Array<f64> r(p + 1, 0.0, scratch_alloc);
+    const f64 inv_n = 1.0 / as<f64>(len);
+    for (usize k = 0; k <= p; ++k) {
+        f64 s = 0.0;
+        for (usize i = 0; i + k < len; ++i) {
+            s += (x[i] * inv_x) * (x[i + k] * inv_x);
+        }
+        r[k] = s * inv_n;
+    }
+
+    if (!(r[0] > 0.0) || !keel::is_finite(r[0])) {
         return;
     }
 
@@ -93,13 +131,20 @@ void lpc_levinson(const f64* x, usize len, usize p, f64* a_out, Allocator* scrat
     Array<f64> a_next(p + 1, 0.0, scratch_alloc);
     a_prev[0] = 1.0;
     f64 e = r[0];
+    const f64 e_tol = Limits<f64>::kMinPositive;
 
     for (usize i = 1; i <= p; ++i) {
+        if (!(e > e_tol) || !keel::is_finite(e)) {
+            break;
+        }
         f64 num = r[i];
         for (usize j = 1; j < i; ++j) {
             num += a_prev[j] * r[i - j];
         }
-        const f64 k = (e != 0.0) ? (-num / e) : 0.0;
+        const f64 k = -num / e;
+        if (!keel::is_finite(k)) {
+            break;
+        }
         a_next[0] = 1.0;
         for (usize j = 1; j < i; ++j) {
             a_next[j] = a_prev[j] + k * a_prev[i - j];
@@ -118,9 +163,18 @@ void lpc_levinson(const f64* x, usize len, usize p, f64* a_out, Allocator* scrat
 
 AudioStatus pitch_ncf(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const FrameSpec& sp, MutArrayRef<f64> f0_out,
                       Allocator* alloc) {
-    const usize min_lag = as<usize>(keel::floor(fs / max_f));
-    const usize ceil_max = as<usize>(keel::ceil(fs / min_f));
-    const usize max_lag = ((sp.win_len - 1) < ceil_max) ? (sp.win_len - 1) : ceil_max;
+    if (sp.win_len < 2) {
+        for (usize f = 0; f < sp.num_frames; ++f) {
+            f0_out[f] = 0.0;
+        }
+        return AudioStatus::kOk;
+    }
+    const i64 min_lag_i = keel::floor_i64(fs / max_f);
+    const i64 ceil_max_i = keel::ceil_i64(fs / min_f);
+    const usize min_lag = (min_lag_i > 1) ? as<usize>(min_lag_i) : 1;
+    const usize win_m1 = sp.win_len - 1;
+    const usize max_lag =
+        (ceil_max_i <= 0) ? 0 : ((as<usize>(ceil_max_i) < win_m1) ? as<usize>(ceil_max_i) : win_m1);
     if (max_lag <= min_lag) {
         for (usize f = 0; f < sp.num_frames; ++f) {
             f0_out[f] = 0.0;
@@ -140,14 +194,25 @@ AudioStatus pitch_ncf(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         for (usize i = 0; i < sp.win_len; ++i) {
             frame[i] = x[start + i] * win[i];
         }
+        const f64 max_x = frame_max_abs(frame.data(), sp.win_len);
+        if (keel::is_nan(max_x)) {
+            f0_out[f] = kNaN;
+            continue;
+        }
+        if (max_x > 0.0 && keel::is_finite(max_x)) {
+            const f64 inv_x = 1.0 / max_x;
+            for (usize i = 0; i < sp.win_len; ++i) {
+                frame[i] *= inv_x;
+            }
+        }
         autocorr_lags(frame.data(), sp.win_len, max_lag + 1, r_buf.data());
         partial_power_lags(frame.data(), sp.win_len, max_lag + 1, p_buf.data());
 
-        const f64 total = r_buf[0];
+        const f64 sqrt_total = keel::sqrt(keel::max(0.0, r_buf[0]));
         f64 best_val = -1.0;
         usize best_lag = min_lag;
         for (usize k = min_lag; k <= max_lag; ++k) {
-            const f64 denom = keel::sqrt(total * p_buf[k]) + 1e-300;
+            const f64 denom = sqrt_total * keel::sqrt(keel::max(0.0, p_buf[k])) + 1e-300;
             const f64 g = r_buf[k] / denom;
             if (g > best_val) {
                 best_val = g;
@@ -157,12 +222,15 @@ AudioStatus pitch_ncf(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
 
         f64 lag = as<f64>(best_lag);
         if (best_lag > min_lag && best_lag < max_lag) {
-            const f64 a = r_buf[best_lag - 1] / (keel::sqrt(total * p_buf[best_lag - 1]) + 1e-300);
+            const f64 a = r_buf[best_lag - 1] / (sqrt_total * keel::sqrt(keel::max(0.0, p_buf[best_lag - 1])) + 1e-300);
             const f64 b = best_val;
-            const f64 c = r_buf[best_lag + 1] / (keel::sqrt(total * p_buf[best_lag + 1]) + 1e-300);
+            const f64 c = r_buf[best_lag + 1] / (sqrt_total * keel::sqrt(keel::max(0.0, p_buf[best_lag + 1])) + 1e-300);
             const f64 denom = 2.0 * (2.0 * b - c - a);
-            if (keel::abs(denom) > 1e-12) {
-                lag = as<f64>(best_lag) - (a - c) / denom;
+            if (denom > 1e-12) {
+                f64 shift = -(a - c) / denom;
+                if (shift < -0.5) shift = -0.5;
+                if (shift > 0.5) shift = 0.5;
+                lag = as<f64>(best_lag) + shift;
             }
         }
         f0_out[f] = (lag > 0.0) ? (fs / lag) : 0.0;
@@ -172,7 +240,13 @@ AudioStatus pitch_ncf(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
 
 AudioStatus pitch_cep(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const FrameSpec& sp, MutArrayRef<f64> f0_out,
                       Allocator* alloc) {
+    if (sp.win_len > Limits<usize>::kMax / 4) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize nfft = next_pow2(2 * sp.win_len - 1);
+    if (nfft == 0) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize half = nfft / 2 + 1;
 
     ArenaTemp scratch = keel::get_scratch(alloc);
@@ -218,10 +292,9 @@ AudioStatus pitch_cep(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
 
         plan.exec_rfft(frame, half_spec);
         for (usize k = 0; k < half; ++k) {
-            const f64 re = half_spec[k].real();
-            const f64 im = half_spec[k].imag();
-            const f64 p2 = re * re + im * im;
-            log_half[k] = c64((p2 > 0.0) ? keel::log(p2) : log_floor, 0.0);
+            const f64 mag = keel::hypot(half_spec[k].real(), half_spec[k].imag());
+            const f64 lp = (mag > 0.0) ? (2.0 * keel::log(mag)) : log_floor;
+            log_half[k] = c64((lp < log_floor) ? log_floor : lp, 0.0);
         }
         plan.exec_irfft(log_half, cep);
 
@@ -245,7 +318,13 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     constexpr i64 kK = 10;
     const f64 k_delta = keel::log(1.0058);
 
+    if (sp.win_len > Limits<usize>::kMax / 8) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize nfft = next_pow2(4 * sp.win_len);
+    if (nfft == 0) {
+        return AudioStatus::kInvalidArgument;
+    }
     const usize half = nfft / 2;
     const usize pbins = half + 1;
 
@@ -303,6 +382,17 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         for (usize i = 0; i < sp.win_len; ++i) {
             frame[i] = x[offset + i] * win[i];
         }
+        const f64 max_x = frame_max_abs(frame.data(), sp.win_len);
+        if (keel::is_nan(max_x)) {
+            f0_out[f] = kNaN;
+            continue;
+        }
+        if (max_x > 0.0 && keel::is_finite(max_x)) {
+            const f64 inv_x = 1.0 / max_x;
+            for (usize i = 0; i < sp.win_len; ++i) {
+                frame[i] *= inv_x;
+            }
+        }
         for (usize i = sp.win_len; i < nfft; ++i) {
             frame[i] = 0.0;
         }
@@ -324,13 +414,15 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
                 f64 p_val = 0.0;
                 if (ftap >= 0.0 && ftap <= 0.5 * fs) {
                     const f64 pos = ftap / df;
-                    const i64 k0 = keel::floor_i64(pos);
-                    if (k0 >= 0 && as<usize>(k0) < half) {
-                        const f64 frac = pos - as<f64>(k0);
-                        const usize ku = as<usize>(k0);
-                        p_val = p_frame[ku] * (1.0 - frac) + p_frame[ku + 1] * frac;
-                    } else if (k0 >= 0 && as<usize>(k0) == half) {
-                        p_val = p_frame[half];
+                    if (keel::is_finite(pos) && pos >= 0.0) {
+                        const i64 k0 = keel::floor_i64(pos);
+                        if (k0 >= 0 && as<usize>(k0) < half) {
+                            const f64 frac = pos - as<f64>(k0);
+                            const usize ku = as<usize>(k0);
+                            p_val = p_frame[ku] * (1.0 - frac) + p_frame[ku + 1] * frac;
+                        } else if (k0 >= 0 && as<usize>(k0) == half) {
+                            p_val = p_frame[half];
+                        }
                     }
                 }
                 score += h_tap[t] * p_val;
@@ -350,18 +442,23 @@ AudioStatus pitch_pef(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
 AudioStatus pitch_lhs(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const FrameSpec& sp, MutArrayRef<f64> f0_out,
                       Allocator* alloc) {
     constexpr i64 kH = 5;
-    const i64 nfft_i = keel::round_i64(fs);
-    const i64 k_max_bin = kH * keel::floor_i64(max_f);
-    if (nfft_i <= 0 || k_max_bin > nfft_i) {
+    constexpr f64 kMaxSafeFs = 4503599627370496.0; // 2^52
+    if (fs >= kMaxSafeFs || max_f > fs / as<f64>(kH) + 1.0) {
         return AudioStatus::kInvalidArgument;
     }
+    const i64 nfft_i = keel::round_i64(fs);
+    const i64 floor_max_f = keel::floor_i64(max_f);
+    if (nfft_i <= 0 || floor_max_f <= 0 || floor_max_f > nfft_i / kH) {
+        return AudioStatus::kInvalidArgument;
+    }
+    const i64 k_max_bin = kH * floor_max_f;
 
     i64 j_lo_raw = keel::ceil_i64(min_f) - 1;
-    i64 j_hi_raw = keel::floor_i64(max_f) - 1;
+    i64 j_hi_raw = floor_max_f - 1;
     if (j_lo_raw < 0) {
         j_lo_raw = 0;
     }
-    const i64 j_max_cov = (nfft_i - 1) / kH;
+    const i64 j_max_cov = (k_max_bin - 1) / kH;
     if (j_hi_raw > j_max_cov) {
         j_hi_raw = j_max_cov;
     }
@@ -432,9 +529,22 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
                       Allocator* alloc) {
     constexpr usize kLpcOrder = 12;
     constexpr i64 kNharm = 5;
+    constexpr f64 kMaxSafeFs = 4503599627370496.0; // 2^52
+    if (fs >= kMaxSafeFs) {
+        return AudioStatus::kInvalidArgument;
+    }
     const i64 nfft_i = keel::round_i64(fs);
-    const i64 max_bin = kNharm * keel::floor_i64(max_f);
-    if (nfft_i <= 0 || max_bin >= nfft_i) {
+    const i64 floor_max_f = keel::floor_i64(max_f);
+    if (nfft_i <= 0 || floor_max_f <= 0 || floor_max_f > (nfft_i - 1) / kNharm) {
+        for (usize f = 0; f < sp.num_frames; ++f) {
+            f0_out[f] = 0.0;
+        }
+        return AudioStatus::kOk;
+    }
+
+    const i64 lo_full = keel::ceil_i64(min_f);
+    const i64 hi_full = floor_max_f;
+    if (lo_full < 0 || lo_full > hi_full || hi_full >= nfft_i) {
         for (usize f = 0; f < sp.num_frames; ++f) {
             f0_out[f] = 0.0;
         }
@@ -442,12 +552,19 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
     }
 
     const usize nfft = as<usize>(nfft_i);
+    if (mul_overflows(sp.num_frames, nfft)) {
+        return AudioStatus::kInvalidArgument;
+    }
     ArenaTemp scratch = keel::get_scratch(alloc);
 
     Array<f64> hann(sp.win_len, scratch.allocator());
-    const f64 wl_f = as<f64>(sp.win_len);
-    for (usize n = 0; n < sp.win_len; ++n) {
-        hann[n] = 0.5 * (1.0 - keel::cos(kTau * as<f64>(n) / wl_f));
+    if (sp.win_len == 1) {
+        hann[0] = 1.0;
+    } else {
+        const f64 wl_f = as<f64>(sp.win_len);
+        for (usize n = 0; n < sp.win_len; ++n) {
+            hann[n] = 0.5 * (1.0 - keel::cos(kTau * as<f64>(n) / wl_f));
+        }
     }
 
     auto plan_res = fft::FftPlan1D::create(nfft, scratch.allocator());
@@ -518,9 +635,6 @@ AudioStatus pitch_srh(ArrayRef<f64> x, f64 fs, f64 min_f, f64 max_f, const Frame
         }
         return best_f;
     };
-
-    const i64 lo_full = keel::ceil_i64(min_f);
-    const i64 hi_full = keel::floor_i64(max_f);
 
     Array<f64> f0_tmp(sp.num_frames, scratch.allocator());
     f64 sum_pass1 = 0.0;
@@ -611,13 +725,28 @@ AudioStatus harmonic_ratio(ArrayRef<f64> x, f64 sample_rate, MutArrayRef<f64> hr
         for (usize i = 0; i < sp.win_len; ++i) {
             frame[i] = x[start + i] * win[i];
         }
+        const f64 max_x = frame_max_abs(frame.data(), sp.win_len);
+        if (keel::is_nan(max_x)) {
+            hr_out[f] = kNaN;
+            continue;
+        }
+        // Only rescale when squaring would overflow f64 (> 1e150), preserving
+        // exact MATLAB sqrt(eps) floor semantics for normal and quiet frames.
+        const bool rescale = keel::is_finite(max_x) && max_x > 1e150;
+        const f64 inv_x = rescale ? (1.0 / max_x) : 1.0;
+        if (rescale) {
+            for (usize i = 0; i < sp.win_len; ++i) {
+                frame[i] *= inv_x;
+            }
+        }
         autocorr_lags(frame.data(), sp.win_len, m_lag, r_buf.data());
         partial_power_lags(frame.data(), sp.win_len, m_lag, p_buf.data());
 
-        const f64 total = r_buf[0];
+        const f64 sqrt_total = keel::sqrt(keel::max(0.0, r_buf[0]));
+        const f64 eps_term = rescale ? 0.0 : sqrt_eps;
         for (usize k = 0; k < m_lag; ++k) {
-            const f64 denom = keel::sqrt(total * p_buf[k]) + sqrt_eps;
-            gamma[k] = r_buf[k] / denom;
+            const f64 denom = sqrt_total * keel::sqrt(keel::max(0.0, p_buf[k])) + eps_term;
+            gamma[k] = (denom > 0.0) ? (r_buf[k] / denom) : 0.0;
         }
 
         usize low_edge = max_lag;
@@ -653,7 +782,7 @@ AudioStatus harmonic_ratio(ArrayRef<f64> x, f64 sample_rate, MutArrayRef<f64> hr
             const f64 b = gamma[peak_idx];
             const f64 c = gamma[peak_idx + 1];
             const f64 denom_s = 2.0 * (2.0 * b - c - a);
-            if (keel::abs(denom_s) > 1e-12) {
+            if (denom_s > 1e-12) {
                 const f64 s = (c - a) / denom_s;
                 refined = b - 0.25 * (a - c) * s;
             }

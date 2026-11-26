@@ -18,7 +18,7 @@ if(NOT TARGET keel::keel)
     FetchContent_Declare(
         keel
         GIT_REPOSITORY https://github.com/keelcpp/keel.git
-        GIT_TAG        869a5c07a5d77341e5f6acbac5f8e024b274ea08
+        GIT_TAG        4b37783925fe7af7a64daaff90f268df267fbbf3
     )
     FetchContent_MakeAvailable(keel)
 endif()
@@ -41,7 +41,7 @@ if(NOT TARGET keel::interp)
     FetchContent_Declare(
         keel_interp
         GIT_REPOSITORY https://github.com/keelcpp/interp.git
-        GIT_TAG        2dbf567058259e18c729bdc5dee5427b8f565395
+        GIT_TAG        72d23db74ec41ee929c8535ac419624461f3eb4d
     )
     FetchContent_MakeAvailable(keel_interp)
 endif()
@@ -64,7 +64,7 @@ if(NOT TARGET keel::fft)
     FetchContent_Declare(
         keel_fft
         GIT_REPOSITORY https://github.com/keelcpp/fft.git
-        GIT_TAG        abd91d6693d5f2a56311ecc4fbb38e2555ee0486
+        GIT_TAG        8f27754ba6e5671439d97d3847479bdbf7ccfee7
     )
     FetchContent_MakeAvailable(keel_fft)
 endif()

@@ -20,8 +20,16 @@ constexpr f64 kTab5Sone[kTab5N] = {
     2.96,  4.14,  5.77,  8.04,  11.2,  15.8,  22.7,  32.9,  47.7,  69.6,  102.0, 151.0, 225.0, 337.6,
 };
 
-[[nodiscard]] f64 erb_scale() noexcept {
-    return keel::log(10.0) * 1000.0 / (24.673 * 4.368);
+constexpr f64 kErbScaleLn = 1000.0 / (24.673 * 4.368);
+
+[[nodiscard]] bool overlaps_forward(const f64* in_ptr, const f64* out_ptr, usize n) noexcept {
+    if (n == 0 || in_ptr == nullptr || out_ptr == nullptr) {
+        return false;
+    }
+    const usize in_addr = reinterpret_cast<usize>(in_ptr);
+    const usize out_addr = reinterpret_cast<usize>(out_ptr);
+    const usize byte_span = n * sizeof(f64);
+    return out_addr > in_addr && (out_addr - in_addr) < byte_span;
 }
 
 [[nodiscard]] f64 linear_extrap(const f64* xs, const f64* ys, usize n, f64 x) noexcept {
@@ -34,76 +42,106 @@ constexpr f64 kTab5Sone[kTab5N] = {
 }
 
 [[nodiscard]] f64 eval_sone2phon_532_2(f64 s, ArrayRef<f64> coefs_s2p) noexcept {
-    f64 phon_val = 0.0;
-    if (s > kTab5Sone[kTab5N - 1]) {
-        phon_val = linear_extrap(kTab5Sone, kTab5Phon, kTab5N, s);
-    } else {
-        const f64 q[1] = {s};
-        f64 y[1] = {0.0};
-        (void)keel::interp::ppval(kTab5Sone, coefs_s2p, kTab5Pieces, 4, q, y);
-        phon_val = y[0];
+    if (keel::is_nan(s)) {
+        return kNaN;
     }
-    return (phon_val < 0.0) ? 0.0 : phon_val;
+    if (s < 0.0) {
+        return kNaN;
+    }
+    if (s <= kTab5Sone[0]) {
+        return 0.0;
+    }
+    if (s >= kTab5Sone[kTab5N - 1]) {
+        return linear_extrap(kTab5Sone, kTab5Phon, kTab5N, s);
+    }
+    const f64 q[1] = {s};
+    f64 y[1] = {0.0};
+    (void)keel::interp::ppval(kTab5Sone, coefs_s2p, kTab5Pieces, 4, q, y);
+    return (y[0] < 0.0) ? 0.0 : y[0];
 }
 
-[[nodiscard]] f64 eval_phon2sone_532_2(f64 p, ArrayRef<f64> coefs_p2s,
-                                       ArrayRef<f64> coefs_s2p) noexcept {
-    const f64 p_capped = (p > 144.0) ? 144.0 : p;
-    const f64 q[1] = {p_capped};
-    f64 guess_buf[1] = {0.0};
-    (void)keel::interp::ppval(kTab5Phon, coefs_p2s, kTab5Pieces, 4, q, guess_buf);
-    const f64 guess = guess_buf[0];
-    if (guess <= 0.0) {
-        return guess;
+[[nodiscard]] f64 eval_phon2sone_532_2(f64 p, ArrayRef<f64> coefs_s2p) noexcept {
+    if (keel::is_nan(p) || p < 0.0) {
+        return kNaN;
+    }
+    if (p == 0.0) {
+        return kTab5Sone[0];
+    }
+    if (p >= kTab5Phon[kTab5N - 1]) {
+        return linear_extrap(kTab5Phon, kTab5Sone, kTab5N, p);
     }
 
-    f64 lo = guess * 0.5;
-    f64 hi = guess * 1.5;
-    f64 f_lo = eval_sone2phon_532_2(lo, coefs_s2p) - p_capped;
-    f64 f_hi = eval_sone2phon_532_2(hi, coefs_s2p) - p_capped;
-    usize expand = 0;
-    while (f_lo * f_hi > 0.0 && expand < 30) {
-        lo *= 0.5;
-        hi *= 1.5;
-        f_lo = eval_sone2phon_532_2(lo, coefs_s2p) - p_capped;
-        f_hi = eval_sone2phon_532_2(hi, coefs_s2p) - p_capped;
-        ++expand;
+    // Locate the unique strictly monotonic table interval [kTab5Phon[idx], kTab5Phon[idx + 1]].
+    usize idx = 0;
+    while (idx + 1 < kTab5Pieces && kTab5Phon[idx + 1] < p) {
+        ++idx;
     }
-    if (f_lo * f_hi > 0.0) {
-        return guess;
+    if (p == kTab5Phon[idx]) {
+        return kTab5Sone[idx];
     }
+    if (p == kTab5Phon[idx + 1]) {
+        return kTab5Sone[idx + 1];
+    }
+
+    f64 lo = kTab5Sone[idx];
+    f64 hi = kTab5Sone[idx + 1];
     for (usize it = 0; it < 80; ++it) {
         const f64 mid = 0.5 * (lo + hi);
-        if (hi - lo < 1e-12 * keel::max(1.0, keel::abs(mid))) {
+        if (hi - lo <= 1e-14 * keel::max(1.0, mid)) {
             return mid;
         }
-        const f64 f_mid = eval_sone2phon_532_2(mid, coefs_s2p) - p_capped;
+        const f64 f_mid = eval_sone2phon_532_2(mid, coefs_s2p) - p;
         if (f_mid == 0.0) {
             return mid;
         }
-        if (f_lo * f_mid < 0.0) {
+        if (f_mid > 0.0) {
             hi = mid;
-            f_hi = f_mid;
         } else {
             lo = mid;
-            f_lo = f_mid;
         }
     }
     return 0.5 * (lo + hi);
 }
 
+template <typename Fn>
+AudioStatus apply_unary(ArrayRef<f64> in, MutArrayRef<f64> out, Fn fn) noexcept {
+    const usize n = in.size();
+    if (out.size() < n) {
+        return AudioStatus::kInvalidArgument;
+    }
+    if (overlaps_forward(in.data(), out.data(), n)) {
+        for (usize i = n; i > 0; --i) {
+            const usize idx = i - 1;
+            out[idx] = fn(in[idx]);
+        }
+    } else {
+        for (usize i = 0; i < n; ++i) {
+            out[i] = fn(in[i]);
+        }
+    }
+    return AudioStatus::kOk;
+}
+
 } // namespace
 
 f64 hz_to_mel(f64 hz) noexcept {
-    return 2595.0 * keel::log10(1.0 + hz / 700.0);
+    return (2595.0 / kLn10) * keel::log1p(hz / 700.0);
 }
 
 f64 mel_to_hz(f64 mel) noexcept {
-    return 700.0 * (keel::pow(10.0, mel / 2595.0) - 1.0);
+    return 700.0 * keel::expm1(mel * (kLn10 / 2595.0));
 }
 
 f64 hz_to_bark(f64 hz) noexcept {
-    f64 bark = 26.81 * hz / (1960.0 + hz) - 0.53;
+    if (keel::is_nan(hz)) {
+        return kNaN;
+    }
+    f64 bark = 0.0;
+    if (hz > 1e100) {
+        bark = 26.81 / (1960.0 / hz + 1.0) - 0.53;
+    } else {
+        bark = 26.81 * hz / (1960.0 + hz) - 0.53;
+    }
     if (bark < 2.0) {
         bark = 0.85 * bark + 0.3;
     } else if (bark > 20.1) {
@@ -113,6 +151,9 @@ f64 hz_to_bark(f64 hz) noexcept {
 }
 
 f64 bark_to_hz(f64 bark) noexcept {
+    if (keel::is_nan(bark)) {
+        return kNaN;
+    }
     f64 b = bark;
     if (b < 2.0) {
         b = (b - 0.3) / 0.85;
@@ -123,28 +164,32 @@ f64 bark_to_hz(f64 bark) noexcept {
 }
 
 f64 hz_to_erb(f64 hz) noexcept {
-    return erb_scale() * keel::log10(1.0 + 0.004368 * hz);
+    return kErbScaleLn * keel::log1p(0.004368 * hz);
 }
 
 f64 erb_to_hz(f64 erb) noexcept {
-    return (keel::pow(10.0, erb / erb_scale()) - 1.0) / 0.004368;
+    return keel::expm1(erb / kErbScaleLn) / 0.004368;
 }
 
 f64 phon_to_sone(f64 phon, bool iso532_2, Allocator* alloc) {
+    if (keel::is_nan(phon) || phon < 0.0) {
+        return kNaN;
+    }
     if (!iso532_2) {
         if (phon < 40.0) {
             return keel::pow(phon / 40.0, 1.0 / 0.35);
         }
         return keel::pow(2.0, phon / 10.0 - 4.0);
     }
-    f64 coefs_p2s[kTab5Pieces * 4]{};
     f64 coefs_s2p[kTab5Pieces * 4]{};
-    (void)keel::interp::pchip_pp_coefs(kTab5Phon, kTab5Sone, coefs_p2s, alloc);
     (void)keel::interp::pchip_pp_coefs(kTab5Sone, kTab5Phon, coefs_s2p, alloc);
-    return eval_phon2sone_532_2(phon, coefs_p2s, coefs_s2p);
+    return eval_phon2sone_532_2(phon, coefs_s2p);
 }
 
 f64 sone_to_phon(f64 sone, bool iso532_2, Allocator* alloc) {
+    if (keel::is_nan(sone) || sone < 0.0) {
+        return kNaN;
+    }
     if (!iso532_2) {
         if (sone < 1.0) {
             return 40.0 * keel::pow(sone, 0.35);
@@ -157,79 +202,53 @@ f64 sone_to_phon(f64 sone, bool iso532_2, Allocator* alloc) {
 }
 
 AudioStatus hz_to_mel(ArrayRef<f64> in, MutArrayRef<f64> out) noexcept {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
-    for (usize i = 0; i < in.size(); ++i) out[i] = hz_to_mel(in[i]);
-    return AudioStatus::kOk;
+    return apply_unary(in, out, [](f64 v) noexcept { return hz_to_mel(v); });
 }
 
 AudioStatus mel_to_hz(ArrayRef<f64> in, MutArrayRef<f64> out) noexcept {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
-    for (usize i = 0; i < in.size(); ++i) out[i] = mel_to_hz(in[i]);
-    return AudioStatus::kOk;
+    return apply_unary(in, out, [](f64 v) noexcept { return mel_to_hz(v); });
 }
 
 AudioStatus hz_to_bark(ArrayRef<f64> in, MutArrayRef<f64> out) noexcept {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
-    for (usize i = 0; i < in.size(); ++i) out[i] = hz_to_bark(in[i]);
-    return AudioStatus::kOk;
+    return apply_unary(in, out, [](f64 v) noexcept { return hz_to_bark(v); });
 }
 
 AudioStatus bark_to_hz(ArrayRef<f64> in, MutArrayRef<f64> out) noexcept {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
-    for (usize i = 0; i < in.size(); ++i) out[i] = bark_to_hz(in[i]);
-    return AudioStatus::kOk;
+    return apply_unary(in, out, [](f64 v) noexcept { return bark_to_hz(v); });
 }
 
 AudioStatus hz_to_erb(ArrayRef<f64> in, MutArrayRef<f64> out) noexcept {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
-    const f64 scale = erb_scale();
-    for (usize i = 0; i < in.size(); ++i) {
-        out[i] = scale * keel::log10(1.0 + 0.004368 * in[i]);
-    }
-    return AudioStatus::kOk;
+    return apply_unary(in, out, [](f64 v) noexcept { return hz_to_erb(v); });
 }
 
 AudioStatus erb_to_hz(ArrayRef<f64> in, MutArrayRef<f64> out) noexcept {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
-    const f64 scale = erb_scale();
-    for (usize i = 0; i < in.size(); ++i) {
-        out[i] = (keel::pow(10.0, in[i] / scale) - 1.0) / 0.004368;
-    }
-    return AudioStatus::kOk;
+    return apply_unary(in, out, [](f64 v) noexcept { return erb_to_hz(v); });
 }
 
 AudioStatus phon_to_sone(ArrayRef<f64> in, MutArrayRef<f64> out, bool iso532_2, Allocator* alloc) {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
+    if (out.size() < in.size()) {
+        return AudioStatus::kInvalidArgument;
+    }
     if (!iso532_2) {
-        for (usize i = 0; i < in.size(); ++i) {
-            out[i] = phon_to_sone(in[i], false, nullptr);
-        }
-        return AudioStatus::kOk;
+        return apply_unary(in, out, [](f64 v) noexcept { return phon_to_sone(v, false, nullptr); });
     }
-    f64 coefs_p2s[kTab5Pieces * 4]{};
     f64 coefs_s2p[kTab5Pieces * 4]{};
-    (void)keel::interp::pchip_pp_coefs(kTab5Phon, kTab5Sone, coefs_p2s, alloc);
     (void)keel::interp::pchip_pp_coefs(kTab5Sone, kTab5Phon, coefs_s2p, alloc);
-    for (usize i = 0; i < in.size(); ++i) {
-        out[i] = eval_phon2sone_532_2(in[i], coefs_p2s, coefs_s2p);
-    }
-    return AudioStatus::kOk;
+    const ArrayRef<f64> coefs_ref(coefs_s2p, kTab5Pieces * 4);
+    return apply_unary(in, out, [coefs_ref](f64 v) noexcept { return eval_phon2sone_532_2(v, coefs_ref); });
 }
 
 AudioStatus sone_to_phon(ArrayRef<f64> in, MutArrayRef<f64> out, bool iso532_2, Allocator* alloc) {
-    if (out.size() < in.size()) return AudioStatus::kInvalidArgument;
+    if (out.size() < in.size()) {
+        return AudioStatus::kInvalidArgument;
+    }
     if (!iso532_2) {
-        for (usize i = 0; i < in.size(); ++i) {
-            out[i] = sone_to_phon(in[i], false, nullptr);
-        }
-        return AudioStatus::kOk;
+        return apply_unary(in, out, [](f64 v) noexcept { return sone_to_phon(v, false, nullptr); });
     }
     f64 coefs_s2p[kTab5Pieces * 4]{};
     (void)keel::interp::pchip_pp_coefs(kTab5Sone, kTab5Phon, coefs_s2p, alloc);
-    for (usize i = 0; i < in.size(); ++i) {
-        out[i] = eval_sone2phon_532_2(in[i], coefs_s2p);
-    }
-    return AudioStatus::kOk;
+    const ArrayRef<f64> coefs_ref(coefs_s2p, kTab5Pieces * 4);
+    return apply_unary(in, out, [coefs_ref](f64 v) noexcept { return eval_sone2phon_532_2(v, coefs_ref); });
 }
 
 } // namespace keel::audio
